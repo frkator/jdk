@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -92,15 +92,16 @@ final class ProxyGenerator extends ClassWriter {
     /**
      * debugging flag for saving generated class files
      */
+    @SuppressWarnings("removal")
     private static final boolean saveGeneratedFiles =
             java.security.AccessController.doPrivileged(
                     new GetBooleanAction(
                             "jdk.proxy.ProxyGenerator.saveGeneratedFiles"));
 
     /* Preloaded ProxyMethod objects for methods in java.lang.Object */
-    private final static ProxyMethod hashCodeMethod;
-    private final static ProxyMethod equalsMethod;
-    private final static ProxyMethod toStringMethod;
+    private static final ProxyMethod hashCodeMethod;
+    private static final ProxyMethod equalsMethod;
+    private static final ProxyMethod toStringMethod;
 
     static {
         try {
@@ -168,6 +169,7 @@ final class ProxyGenerator extends ClassWriter {
      * @param interfaces  proxy interfaces
      * @param accessFlags access flags of the proxy class
      */
+    @SuppressWarnings("removal")
     static byte[] generateProxyClass(ClassLoader loader,
                                      final String name,
                                      List<Class<?>> interfaces,
@@ -203,10 +205,11 @@ final class ProxyGenerator extends ClassWriter {
     }
 
     /**
-     * Return an array of the type names from an array of Classes.
+     * Return an array of the class and interface names from an array of Classes.
      *
      * @param classes an array of classes or interfaces
-     * @return the array of class names; or null if there are no classes
+     * @return the array of class and interface names; or null if classes is
+     * null or empty
      */
     private static String[] typeNames(List<Class<?>> classes) {
         if (classes == null || classes.size() == 0)

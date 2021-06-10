@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2016, 2020 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -121,7 +121,7 @@ void InterpreterMacroAssembler::dispatch_base(TosState state, address* table, bo
     address *sfpt_tbl = Interpreter::safept_table(state);
     if (table != sfpt_tbl) {
       Label dispatch;
-      const Address poll_byte_addr(Z_thread, in_bytes(Thread::polling_word_offset()) + 7 /* Big Endian */);
+      const Address poll_byte_addr(Z_thread, in_bytes(JavaThread::polling_word_offset()) + 7 /* Big Endian */);
       // Armed page has poll_bit set, if poll bit is cleared just continue.
       z_tm(poll_byte_addr, SafepointMechanism::poll_bit());
       z_braz(dispatch);
@@ -999,9 +999,9 @@ void InterpreterMacroAssembler::lock_object(Register monitor, Register object) {
   // Load markWord from object into displaced_header.
   z_lg(displaced_header, oopDesc::mark_offset_in_bytes(), object);
 
-  if (DiagnoseSyncOnPrimitiveWrappers != 0) {
+  if (DiagnoseSyncOnValueBasedClasses != 0) {
     load_klass(Z_R1_scratch, object);
-    testbit(Address(Z_R1_scratch, Klass::access_flags_offset()), exact_log2(JVM_ACC_IS_BOX_CLASS));
+    testbit(Address(Z_R1_scratch, Klass::access_flags_offset()), exact_log2(JVM_ACC_IS_VALUE_BASED_CLASS));
     z_btrue(slow_case);
   }
 

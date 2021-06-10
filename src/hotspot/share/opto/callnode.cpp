@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -627,9 +627,15 @@ JVMState* JVMState::clone_deep(Compile* C) const {
  * Reset map for all callers
  */
 void JVMState::set_map_deep(SafePointNode* map) {
-  for (JVMState* p = this; p->_caller != NULL; p = p->_caller) {
+  for (JVMState* p = this; p != NULL; p = p->_caller) {
     p->set_map(map);
   }
+}
+
+// unlike set_map(), this is two-way setting.
+void JVMState::bind_map(SafePointNode* map) {
+  set_map(map);
+  _map->set_jvms(this);
 }
 
 // Adapt offsets in in-array after adding or removing an edge.
@@ -730,10 +736,24 @@ Node *CallNode::match( const ProjNode *proj, const Matcher *match ) {
 
   case TypeFunc::Parms: {       // Normal returns
     uint ideal_reg = tf()->range()->field_at(TypeFunc::Parms)->ideal_reg();
-    OptoRegPair regs = is_CallRuntime()
-      ? match->c_return_value(ideal_reg)  // Calls into C runtime
-      : match->  return_value(ideal_reg); // Calls into compiled Java code
+    OptoRegPair regs = Opcode() == Op_CallLeafVector
+      ? match->vector_return_value(ideal_reg)      // Calls into assembly vector routine
+      : is_CallRuntime()
+        ? match->c_return_value(ideal_reg)  // Calls into C runtime
+        : match->  return_value(ideal_reg); // Calls into compiled Java code
     RegMask rm = RegMask(regs.first());
+
+    if (Opcode() == Op_CallLeafVector) {
+      // If the return is in vector, compute appropriate regmask taking into account the whole range
+      if(ideal_reg >= Op_VecS && ideal_reg <= Op_VecZ) {
+        if(OptoReg::is_valid(regs.second())) {
+          for (OptoReg::Name r = regs.first(); r <= regs.second(); r = OptoReg::add(r, 1)) {
+            rm.Insert(r);
+          }
+        }
+      }
+    }
+
     if( OptoReg::is_valid(regs.second()) )
       rm.Insert( regs.second() );
     return new MachProjNode(this,proj->_con,rm,ideal_reg);
@@ -942,25 +962,15 @@ void CallNode::extract_projections(CallProjections* projs, bool separate_io_proj
   }
 }
 
-Node *CallNode::Ideal(PhaseGVN *phase, bool can_reshape) {
+Node* CallNode::Ideal(PhaseGVN* phase, bool can_reshape) {
+#ifdef ASSERT
+  // Validate attached generator
   CallGenerator* cg = generator();
-  if (can_reshape && cg != NULL && cg->is_mh_late_inline() && !cg->already_attempted()) {
-    // Check whether this MH handle call becomes a candidate for inlining
-    ciMethod* callee = cg->method();
-    vmIntrinsics::ID iid = callee->intrinsic_id();
-    if (iid == vmIntrinsics::_invokeBasic) {
-      if (in(TypeFunc::Parms)->Opcode() == Op_ConP) {
-        phase->C->prepend_late_inline(cg);
-        set_generator(NULL);
-      }
-    } else {
-      assert(callee->has_member_arg(), "wrong type of call?");
-      if (in(TypeFunc::Parms + callee->arg_size() - 1)->Opcode() == Op_ConP) {
-        phase->C->prepend_late_inline(cg);
-        set_generator(NULL);
-      }
-    }
+  if (cg != NULL) {
+    assert(is_CallStaticJava()  && cg->is_mh_late_inline() ||
+           is_CallDynamicJava() && cg->is_virtual_late_inline(), "mismatch");
   }
+#endif // ASSERT
   return SafePointNode::Ideal(phase, can_reshape);
 }
 
@@ -979,7 +989,7 @@ bool CallJavaNode::cmp( const Node &n ) const {
          _override_symbolic_info == call._override_symbolic_info;
 }
 
-void CallJavaNode::copy_call_debug_info(PhaseIterGVN* phase, SafePointNode *sfpt) {
+void CallJavaNode::copy_call_debug_info(PhaseIterGVN* phase, SafePointNode* sfpt) {
   // Copy debug information and adjust JVMState information
   uint old_dbg_start = sfpt->is_Call() ? sfpt->as_Call()->tf()->domain()->cnt() : (uint)TypeFunc::Parms+1;
   uint new_dbg_start = tf()->domain()->cnt();
@@ -1023,7 +1033,7 @@ bool CallJavaNode::validate_symbolic_info() const {
   if (method() == NULL) {
     return true; // call into runtime or uncommon trap
   }
-  ciMethod* symbolic_info = jvms()->method()->get_method_at_bci(_bci);
+  ciMethod* symbolic_info = jvms()->method()->get_method_at_bci(jvms()->bci());
   ciMethod* callee = method();
   if (symbolic_info->is_method_handle_intrinsic() && !callee->is_method_handle_intrinsic()) {
     assert(override_symbolic_info(), "should be set");
@@ -1034,7 +1044,7 @@ bool CallJavaNode::validate_symbolic_info() const {
 #endif
 
 #ifndef PRODUCT
-void CallJavaNode::dump_spec(outputStream *st) const {
+void CallJavaNode::dump_spec(outputStream* st) const {
   if( _method ) _method->print_short_name(st);
   CallNode::dump_spec(st);
 }
@@ -1053,6 +1063,38 @@ uint CallStaticJavaNode::size_of() const { return sizeof(*this); }
 bool CallStaticJavaNode::cmp( const Node &n ) const {
   CallStaticJavaNode &call = (CallStaticJavaNode&)n;
   return CallJavaNode::cmp(call);
+}
+
+Node* CallStaticJavaNode::Ideal(PhaseGVN* phase, bool can_reshape) {
+  CallGenerator* cg = generator();
+  if (can_reshape && cg != NULL) {
+    assert(IncrementalInlineMH, "required");
+    assert(cg->call_node() == this, "mismatch");
+    assert(cg->is_mh_late_inline(), "not virtual");
+
+    // Check whether this MH handle call becomes a candidate for inlining.
+    ciMethod* callee = cg->method();
+    vmIntrinsics::ID iid = callee->intrinsic_id();
+    if (iid == vmIntrinsics::_invokeBasic) {
+      if (in(TypeFunc::Parms)->Opcode() == Op_ConP) {
+        phase->C->prepend_late_inline(cg);
+        set_generator(NULL);
+      }
+    } else if (iid == vmIntrinsics::_linkToNative) {
+      if (in(TypeFunc::Parms + callee->arg_size() - 1)->Opcode() == Op_ConP /* NEP */
+          && in(TypeFunc::Parms + 1)->Opcode() == Op_ConL /* address */) {
+        phase->C->prepend_late_inline(cg);
+        set_generator(NULL);
+      }
+    } else {
+      assert(callee->has_member_arg(), "wrong type of call?");
+      if (in(TypeFunc::Parms + callee->arg_size() - 1)->Opcode() == Op_ConP) {
+        phase->C->prepend_late_inline(cg);
+        set_generator(NULL);
+      }
+    }
+  }
+  return CallNode::Ideal(phase, can_reshape);
 }
 
 //----------------------------uncommon_trap_request----------------------------
@@ -1111,6 +1153,48 @@ bool CallDynamicJavaNode::cmp( const Node &n ) const {
   CallDynamicJavaNode &call = (CallDynamicJavaNode&)n;
   return CallJavaNode::cmp(call);
 }
+
+Node* CallDynamicJavaNode::Ideal(PhaseGVN* phase, bool can_reshape) {
+  CallGenerator* cg = generator();
+  if (can_reshape && cg != NULL) {
+    assert(IncrementalInlineVirtual, "required");
+    assert(cg->call_node() == this, "mismatch");
+    assert(cg->is_virtual_late_inline(), "not virtual");
+
+    // Recover symbolic info for method resolution.
+    ciMethod* caller = jvms()->method();
+    ciBytecodeStream iter(caller);
+    iter.force_bci(jvms()->bci());
+
+    bool             not_used1;
+    ciSignature*     not_used2;
+    ciMethod*        orig_callee  = iter.get_method(not_used1, &not_used2);  // callee in the bytecode
+    ciKlass*         holder       = iter.get_declared_method_holder();
+    if (orig_callee->is_method_handle_intrinsic()) {
+      assert(_override_symbolic_info, "required");
+      orig_callee = method();
+      holder = method()->holder();
+    }
+
+    ciInstanceKlass* klass = ciEnv::get_instance_klass_for_declared_method_holder(holder);
+
+    Node* receiver_node = in(TypeFunc::Parms);
+    const TypeOopPtr* receiver_type = phase->type(receiver_node)->isa_oopptr();
+
+    int  not_used3;
+    bool call_does_dispatch;
+    ciMethod* callee = phase->C->optimize_virtual_call(caller, klass, holder, orig_callee, receiver_type, true /*is_virtual*/,
+                                                       call_does_dispatch, not_used3);  // out-parameters
+    if (!call_does_dispatch) {
+      // Register for late inlining.
+      cg->set_callee_method(callee);
+      phase->C->prepend_late_inline(cg); // MH late inlining prepends to the list, so do the same
+      set_generator(NULL);
+    }
+  }
+  return CallNode::Ideal(phase, can_reshape);
+}
+
 #ifndef PRODUCT
 void CallDynamicJavaNode::dump_spec(outputStream *st) const {
   st->print("# Dynamic ");
@@ -1131,6 +1215,11 @@ void CallRuntimeNode::dump_spec(outputStream *st) const {
   CallNode::dump_spec(st);
 }
 #endif
+uint CallLeafVectorNode::size_of() const { return sizeof(*this); }
+bool CallLeafVectorNode::cmp( const Node &n ) const {
+  CallLeafVectorNode &call = (CallLeafVectorNode&)n;
+  return CallLeafNode::cmp(call) && _num_bits == call._num_bits;
+}
 
 //=============================================================================
 uint CallNativeNode::size_of() const { return sizeof(*this); }
@@ -1200,6 +1289,21 @@ void CallNativeNode::dump_spec(outputStream *st) const {
 //------------------------------calling_convention-----------------------------
 void CallRuntimeNode::calling_convention(BasicType* sig_bt, VMRegPair *parm_regs, uint argcnt) const {
   SharedRuntime::c_calling_convention(sig_bt, parm_regs, /*regs2=*/nullptr, argcnt);
+}
+
+void CallLeafVectorNode::calling_convention( BasicType* sig_bt, VMRegPair *parm_regs, uint argcnt ) const {
+#ifdef ASSERT
+  assert(tf()->range()->field_at(TypeFunc::Parms)->is_vect()->length_in_bytes() * BitsPerByte == _num_bits,
+         "return vector size must match");
+  const TypeTuple* d = tf()->domain();
+  for (uint i = TypeFunc::Parms; i < d->cnt(); i++) {
+    Node* arg = in(i);
+    assert(arg->bottom_type()->is_vect()->length_in_bytes() * BitsPerByte == _num_bits,
+           "vector argument size must match");
+  }
+#endif
+
+  SharedRuntime::vector_calling_convention(parm_regs, _num_bits, argcnt);
 }
 
 void CallNativeNode::calling_convention( BasicType* sig_bt, VMRegPair *parm_regs, uint argcnt ) const {
@@ -1298,6 +1402,7 @@ SafePointNode* SafePointNode::next_exception() const {
 //------------------------------Ideal------------------------------------------
 // Skip over any collapsed Regions
 Node *SafePointNode::Ideal(PhaseGVN *phase, bool can_reshape) {
+  assert(_jvms == NULL || ((uintptr_t)_jvms->map() & 1) || _jvms->map() == this, "inconsistent JVMState");
   return remove_dead_region(phase, can_reshape) ? this : NULL;
 }
 
@@ -1451,17 +1556,27 @@ void SafePointNode::disconnect_from_root(PhaseIterGVN *igvn) {
 
 SafePointScalarObjectNode::SafePointScalarObjectNode(const TypeOopPtr* tp,
 #ifdef ASSERT
-                                                     AllocateNode* alloc,
+                                                     Node* alloc,
 #endif
                                                      uint first_index,
-                                                     uint n_fields) :
+                                                     uint n_fields,
+                                                     bool is_auto_box) :
   TypeNode(tp, 1), // 1 control input -- seems required.  Get from root.
   _first_index(first_index),
-  _n_fields(n_fields)
+  _n_fields(n_fields),
+  _is_auto_box(is_auto_box)
 #ifdef ASSERT
   , _alloc(alloc)
 #endif
 {
+#ifdef ASSERT
+  if (!alloc->is_Allocate()
+      && !(alloc->Opcode() == Op_VectorBox)
+      && (!alloc->is_CallStaticJava() || !alloc->as_CallStaticJava()->is_boxing_method())) {
+    alloc->dump();
+    assert(false, "unexpected call node");
+  }
+#endif
   init_class_id(Class_SafePointScalarObject);
 }
 
@@ -1994,7 +2109,7 @@ Node *LockNode::Ideal(PhaseGVN *phase, bool can_reshape) {
   // one computed above.
   if (can_reshape && EliminateLocks && !is_non_esc_obj()) {
     //
-    // If we are locking an unescaped object, the lock/unlock is unnecessary
+    // If we are locking an non-escaped object, the lock/unlock is unnecessary
     //
     ConnectionGraph *cgr = phase->C->congraph();
     if (cgr != NULL && cgr->not_global_escape(obj_node())) {
@@ -2162,7 +2277,7 @@ Node *UnlockNode::Ideal(PhaseGVN *phase, bool can_reshape) {
   // Escape state is defined after Parse phase.
   if (can_reshape && EliminateLocks && !is_non_esc_obj()) {
     //
-    // If we are unlocking an unescaped object, the lock/unlock is unnecessary.
+    // If we are unlocking an non-escaped object, the lock/unlock is unnecessary.
     //
     ConnectionGraph *cgr = phase->C->congraph();
     if (cgr != NULL && cgr->not_global_escape(obj_node())) {

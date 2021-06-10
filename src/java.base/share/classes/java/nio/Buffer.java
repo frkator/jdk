@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@ import jdk.internal.access.SharedSecrets;
 import jdk.internal.access.foreign.MemorySegmentProxy;
 import jdk.internal.access.foreign.UnmapperProxy;
 import jdk.internal.misc.ScopedMemoryAccess;
+import jdk.internal.misc.ScopedMemoryAccess.Scope;
 import jdk.internal.misc.Unsafe;
 import jdk.internal.misc.VM.BufferPool;
 import jdk.internal.vm.annotation.ForceInline;
@@ -313,8 +314,8 @@ public abstract class Buffer {
     public Buffer position(int newPosition) {
         if (newPosition > limit | newPosition < 0)
             throw createPositionException(newPosition);
+        if (mark > newPosition) mark = -1;
         position = newPosition;
-        if (mark > position) mark = -1;
         return this;
     }
 
@@ -503,7 +504,8 @@ public abstract class Buffer {
      * @return  The number of elements remaining in this buffer
      */
     public final int remaining() {
-        return limit - position;
+        int rem = limit - position;
+        return rem > 0 ? rem : 0;
     }
 
     /**
@@ -793,7 +795,7 @@ public abstract class Buffer {
 
                 @Override
                 public ByteBuffer newHeapByteBuffer(byte[] hb, int offset, int capacity, MemorySegmentProxy segment) {
-                    return new HeapByteBuffer(hb, offset, capacity, segment);
+                    return new HeapByteBuffer(hb, -1, 0, capacity, capacity, offset, segment);
                 }
 
                 @Override
@@ -818,6 +820,18 @@ public abstract class Buffer {
                 @Override
                 public MemorySegmentProxy bufferSegment(Buffer buffer) {
                     return buffer.segment;
+                }
+
+                @Override
+                public Scope.Handle acquireScope(Buffer buffer, boolean async) {
+                    var scope = buffer.scope();
+                    if (scope == null) {
+                        return null;
+                    }
+                    if (async && scope.ownerThread() != null) {
+                        throw new IllegalStateException("Confined scope not supported");
+                    }
+                    return scope.acquire();
                 }
 
                 @Override

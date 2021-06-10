@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -145,12 +145,13 @@ public abstract class TagletWriter {
     /**
      * Returns the output for a {@code @return} tag.
      *
-     * @param element   The element that owns the doc comment
+     * @param element   the element that owns the doc comment
      * @param returnTag the return tag to document
+     * @param inline    whether this should be written as an inline instance or block instance
      *
      * @return the output
      */
-    protected abstract Content returnTagOutput(Element element, ReturnTree returnTag);
+    protected abstract Content returnTagOutput(Element element, ReturnTree returnTag, boolean inline);
 
     /**
      * Returns the output for {@code @see} tags.
@@ -262,8 +263,7 @@ public abstract class TagletWriter {
                 continue;
             }
 
-            if (element.getKind() == ElementKind.MODULE && taglet instanceof BaseTaglet) {
-                BaseTaglet t = (BaseTaglet) taglet;
+            if (element.getKind() == ElementKind.MODULE && taglet instanceof BaseTaglet t) {
                 switch (t.getTagKind()) {
                     // @uses and @provides are handled separately, so skip here.
                     // See ModuleWriterImpl.computeModulesData
@@ -279,7 +279,7 @@ public abstract class TagletWriter {
                 continue;
             }
 
-            if (taglet instanceof SimpleTaglet && !((SimpleTaglet) taglet).enabled) {
+            if (taglet instanceof SimpleTaglet st && !st.enabled) {
                 // taglet has been disabled
                 continue;
             }

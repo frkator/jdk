@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -240,10 +240,11 @@ import static java.lang.module.ModuleDescriptor.Modifier.SYNTHETIC;
  *
  * <p>
  * A dynamic module can read the modules of all of the superinterfaces of a proxy
- * class and the modules of the types referenced by all public method signatures
- * of a proxy class.  If a superinterface or a referenced type, say {@code T},
- * is in a non-exported package, the {@linkplain Module module} of {@code T} is
- * updated to export the package of {@code T} to the dynamic module.
+ * class and the modules of the classes and interfaces referenced by
+ * all public method signatures of a proxy class.  If a superinterface or
+ * a referenced class or interface, say {@code T}, is in a non-exported package,
+ * the {@linkplain Module module} of {@code T} is updated to export the
+ * package of {@code T} to the dynamic module.
  *
  * <h3>Methods Duplicated in Multiple Proxy Interfaces</h3>
  *
@@ -389,6 +390,7 @@ public class Proxy implements java.io.Serializable {
                                          Class<?>... interfaces)
         throws IllegalArgumentException
     {
+        @SuppressWarnings("removal")
         Class<?> caller = System.getSecurityManager() == null
                               ? null
                               : Reflection.getCallerClass();
@@ -462,6 +464,7 @@ public class Proxy implements java.io.Serializable {
                                          ClassLoader loader,
                                          Class<?> ... interfaces)
     {
+        @SuppressWarnings("removal")
         SecurityManager sm = System.getSecurityManager();
         if (sm != null) {
             ClassLoader ccl = caller.getClassLoader();
@@ -662,6 +665,7 @@ public class Proxy implements java.io.Serializable {
          * Must call the checkProxyAccess method to perform permission checks
          * before calling this.
          */
+        @SuppressWarnings("removal")
         Constructor<?> build() {
             Class<?> proxyClass = defineProxyClass(module, interfaces);
             assert !module.isNamed() || module.isOpen(proxyClass.getPackageName(), Proxy.class.getModule());
@@ -1017,6 +1021,7 @@ public class Proxy implements java.io.Serializable {
                                           InvocationHandler h) {
         Objects.requireNonNull(h);
 
+        @SuppressWarnings("removal")
         final Class<?> caller = System.getSecurityManager() == null
                                     ? null
                                     : Reflection.getCallerClass();
@@ -1054,6 +1059,7 @@ public class Proxy implements java.io.Serializable {
     }
 
     private static void checkNewProxyPermission(Class<?> caller, Class<?> proxyClass) {
+        @SuppressWarnings("removal")
         SecurityManager sm = System.getSecurityManager();
         if (sm != null) {
             if (ReflectUtil.isNonPublicProxyClass(proxyClass)) {
@@ -1075,6 +1081,7 @@ public class Proxy implements java.io.Serializable {
     /**
      * Returns the class loader for the given module.
      */
+    @SuppressWarnings("removal")
     private static ClassLoader getLoader(Module m) {
         PrivilegedAction<ClassLoader> pa = m::getClassLoader;
         return AccessController.doPrivileged(pa);
@@ -1112,6 +1119,7 @@ public class Proxy implements java.io.Serializable {
      *          s.checkPackageAccess()} denies access to the invocation
      *          handler's class.
      */
+    @SuppressWarnings("removal")
     @CallerSensitive
     public static InvocationHandler getInvocationHandler(Object proxy)
         throws IllegalArgumentException
@@ -1285,6 +1293,7 @@ public class Proxy implements java.io.Serializable {
      *
      * @return a lookup for proxy class of this proxy instance
      */
+    @SuppressWarnings("removal")
     private static MethodHandles.Lookup proxyClassLookup(MethodHandles.Lookup caller, Class<?> proxyClass) {
         return AccessController.doPrivileged(new PrivilegedAction<>() {
             @Override

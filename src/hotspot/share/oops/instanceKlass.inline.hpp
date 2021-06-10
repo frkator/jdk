@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,16 +25,42 @@
 #ifndef SHARE_OOPS_INSTANCEKLASS_INLINE_HPP
 #define SHARE_OOPS_INSTANCEKLASS_INLINE_HPP
 
+#include "oops/instanceKlass.hpp"
+
+#include "classfile/javaClasses.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "memory/iterator.hpp"
 #include "memory/resourceArea.hpp"
-#include "oops/instanceKlass.hpp"
-#include "oops/klass.hpp"
+#include "oops/klass.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/atomic.hpp"
 #include "utilities/debug.hpp"
 #include "utilities/globalDefinitions.hpp"
 #include "utilities/macros.hpp"
+
+inline intptr_t* InstanceKlass::start_of_itable()   const { return (intptr_t*)start_of_vtable() + vtable_length(); }
+inline intptr_t* InstanceKlass::end_of_itable()     const { return start_of_itable() + itable_length(); }
+
+inline int InstanceKlass::itable_offset_in_words() const { return start_of_itable() - (intptr_t*)this; }
+
+inline oop InstanceKlass::static_field_base_raw() { return java_mirror(); }
+
+inline OopMapBlock* InstanceKlass::start_of_nonstatic_oop_maps() const {
+  return (OopMapBlock*)(start_of_itable() + itable_length());
+}
+
+inline Klass** InstanceKlass::end_of_nonstatic_oop_maps() const {
+  return (Klass**)(start_of_nonstatic_oop_maps() +
+                   nonstatic_oop_map_count());
+}
+
+inline InstanceKlass* volatile* InstanceKlass::adr_implementor() const {
+  if (is_interface()) {
+    return (InstanceKlass* volatile*)end_of_nonstatic_oop_maps();
+  } else {
+    return NULL;
+  }
+}
 
 inline ObjArrayKlass* InstanceKlass::array_klasses_acquire() const {
   return Atomic::load_acquire(&_array_klasses);
